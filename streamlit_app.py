@@ -1,172 +1,166 @@
-import datetime
-import random
-
-import altair as alt
-import numpy as np
-import pandas as pd
 import streamlit as st
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.svm import SVC
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.ensemble import RandomForestClassifier
 
-# Show app title and description.
-st.set_page_config(page_title="Support tickets", page_icon="🎫")
-st.title("🎫 Support tickets")
-st.write(
-    """
-    This app shows how you can build an internal tool in Streamlit. Here, we are 
-    implementing a support ticket workflow. The user can create a ticket, edit 
-    existing tickets, and view some statistics.
-    """
-)
+# ========== KONFIGURASI DASAR ==========
+st.set_page_config(page_title="Sentiment Analysis App", page_icon="💬", layout="wide")
 
-# Create a random Pandas dataframe with existing tickets.
-if "df" not in st.session_state:
+# ========== CUSTOM STYLE ==========
+st.markdown("""
+    <style>
+        /* Background umum */
+        .main {
+            background-color: var(--background-color);
+            padding: 20px;
+        }
 
-    # Set seed for reproducibility.
-    np.random.seed(42)
+        /* Box metric (card kecil di atas) */
+        div[data-testid="stMetricValue"], div[data-testid="stMetricLabel"] {
+            color: var(--text-color) !important;
+        }
 
-    # Make up some fake issue descriptions.
-    issue_descriptions = [
-        "Network connectivity issues in the office",
-        "Software application crashing on startup",
-        "Printer not responding to print commands",
-        "Email server downtime",
-        "Data backup failure",
-        "Login authentication problems",
-        "Website performance degradation",
-        "Security vulnerability identified",
-        "Hardware malfunction in the server room",
-        "Employee unable to access shared files",
-        "Database connection failure",
-        "Mobile application not syncing data",
-        "VoIP phone system issues",
-        "VPN connection problems for remote employees",
-        "System updates causing compatibility issues",
-        "File server running out of storage space",
-        "Intrusion detection system alerts",
-        "Inventory management system errors",
-        "Customer data not loading in CRM",
-        "Collaboration tool not sending notifications",
-    ]
+        /* Tambahan styling card */
+        [data-testid="stMetric"] {
+            background-color: var(--box-bg);
+            border-radius: 10px;
+            padding: 15px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.05);
+        }
 
-    # Generate the dataframe with 100 rows/tickets.
-    data = {
-        "ID": [f"TICKET-{i}" for i in range(1100, 1000, -1)],
-        "Issue": np.random.choice(issue_descriptions, size=100),
-        "Status": np.random.choice(["Open", "In Progress", "Closed"], size=100),
-        "Priority": np.random.choice(["High", "Medium", "Low"], size=100),
-        "Date Submitted": [
-            datetime.date(2023, 6, 1) + datetime.timedelta(days=random.randint(0, 182))
-            for _ in range(100)
-        ],
-    }
-    df = pd.DataFrame(data)
+        /* Sentimen hasil prediksi */
+        .result-box {
+            font-size: 20px;
+            font-weight: bold;
+            text-align: center;
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 10px;
+        }
+        .positive {background-color: #d4edda; color: #155724;}
+        .negative {background-color: #f8d7da; color: #721c24;}
+        .neutral {background-color: #fff3cd; color: #856404;}
 
-    # Save the dataframe in session state (a dictionary-like object that persists across
-    # page runs). This ensures our data is persisted when the app updates.
-    st.session_state.df = df
+        /* Warna mengikuti tema */
+        :root {
+            --background-color: #0E1117;
+            --text-color: #ffffff;
+            --box-bg: #1E1E1E;
+        }
 
-
-# Show a section to add a new ticket.
-st.header("Add a ticket")
-
-# We're adding tickets via an `st.form` and some input widgets. If widgets are used
-# in a form, the app will only rerun once the submit button is pressed.
-with st.form("add_ticket_form"):
-    issue = st.text_area("Describe the issue")
-    priority = st.selectbox("Priority", ["High", "Medium", "Low"])
-    submitted = st.form_submit_button("Submit")
-
-if submitted:
-    # Make a dataframe for the new ticket and append it to the dataframe in session
-    # state.
-    recent_ticket_number = int(max(st.session_state.df.ID).split("-")[1])
-    today = datetime.datetime.now().strftime("%m-%d-%Y")
-    df_new = pd.DataFrame(
-        [
-            {
-                "ID": f"TICKET-{recent_ticket_number+1}",
-                "Issue": issue,
-                "Status": "Open",
-                "Priority": priority,
-                "Date Submitted": today,
+        @media (prefers-color-scheme: light) {
+            :root {
+                --background-color: #f8f9fa;
+                --text-color: #000000;
+                --box-bg: #ffffff;
             }
-        ]
-    )
+        }
+    </style>
+""", unsafe_allow_html=True)
 
-    # Show a little success message.
-    st.write("Ticket submitted! Here are the ticket details:")
-    st.dataframe(df_new, use_container_width=True, hide_index=True)
-    st.session_state.df = pd.concat([df_new, st.session_state.df], axis=0)
+# ========== FUNGSI PEMROSESAN ==========
+@st.cache_data
+def load_data():
+    return pd.read_csv("Hasil_Labelling_Dataset_Lokal.csv", delimiter=';', low_memory=False)
 
-# Show section to view and edit existing tickets in a table.
-st.header("Existing tickets")
-st.write(f"Number of tickets: `{len(st.session_state.df)}`")
+def load_model(dataset, model_type='SVM'):
+    X = dataset['stemmed_text']
+    y = dataset['Sentiment']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-st.info(
-    "You can edit the tickets by double clicking on a cell. Note how the plots below "
-    "update automatically! You can also sort the table by clicking on the column headers.",
-    icon="✍️",
-)
+    vectorizer = CountVectorizer()
+    X_train_vec = vectorizer.fit_transform(X_train)
+    X_test_vec = vectorizer.transform(X_test)
 
-# Show the tickets dataframe with `st.data_editor`. This lets the user edit the table
-# cells. The edited data is returned as a new dataframe.
-edited_df = st.data_editor(
-    st.session_state.df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "Status": st.column_config.SelectboxColumn(
-            "Status",
-            help="Ticket status",
-            options=["Open", "In Progress", "Closed"],
-            required=True,
-        ),
-        "Priority": st.column_config.SelectboxColumn(
-            "Priority",
-            help="Priority",
-            options=["High", "Medium", "Low"],
-            required=True,
-        ),
-    },
-    # Disable editing the ID and Date Submitted columns.
-    disabled=["ID", "Date Submitted"],
-)
+    if model_type == 'SVM':
+        model = SVC(kernel='linear', random_state=42)
+    elif model_type == 'Naive Bayes':
+        model = MultinomialNB()
+    elif model_type == 'Random Forest':
+        model = RandomForestClassifier(random_state=42, n_estimators=100)
 
-# Show some metrics and charts about the ticket.
-st.header("Statistics")
+    model.fit(X_train_vec, y_train)
+    y_pred = model.predict(X_test_vec)
+    accuracy = accuracy_score(y_test, y_pred)
+    return model, vectorizer, accuracy, y_test, y_pred
 
-# Show metrics side by side using `st.columns` and `st.metric`.
+# ========== SIDEBAR ==========
+st.sidebar.header("⚙️ Pengaturan Analisis")
+model_choice = st.sidebar.selectbox("Pilih Model:", ["SVM", "Naive Bayes", "Random Forest"])
+st.sidebar.info("Aplikasi ini menggunakan **dataset hasil scraping platform X** untuk analisis sentimen otomatis.")
+
+# ========== KONTEN UTAMA ==========
+st.title("💬 Sentiment Analysis Web App ")
+st.caption("Analisis sentimen otomatis menggunakan algoritma Machine Learning")
+
+data = load_data()
+model, vectorizer, accuracy, y_test, y_pred = load_model(data, model_choice)
+
+# ========== METRIC (CARD ATAS) ==========
 col1, col2, col3 = st.columns(3)
-num_open_tickets = len(st.session_state.df[st.session_state.df.Status == "Open"])
-col1.metric(label="Number of open tickets", value=num_open_tickets, delta=10)
-col2.metric(label="First response time (hours)", value=5.2, delta=-1.5)
-col3.metric(label="Average resolution time (hours)", value=16, delta=2)
+sentiment_count = data['Sentiment'].value_counts()
+col1.metric("Jumlah Data", f"{len(data)} Tweet")
+col2.metric("Akurasi Model", f"{accuracy*100:.2f}%")
+col3.metric("Jumlah Kategori", f"{len(sentiment_count)} Sentimen")
 
-# Show two Altair charts using `st.altair_chart`.
-st.write("")
-st.write("##### Ticket status per month")
-status_plot = (
-    alt.Chart(edited_df)
-    .mark_bar()
-    .encode(
-        x="month(Date Submitted):O",
-        y="count():Q",
-        xOffset="Status:N",
-        color="Status:N",
-    )
-    .configure_legend(
-        orient="bottom", titleFontSize=14, labelFontSize=14, titlePadding=5
-    )
-)
-st.altair_chart(status_plot, use_container_width=True, theme="streamlit")
+# ========== VISUALISASI (TAB) ==========
+tab1, tab2, tab3 = st.tabs(["📊 Distribusi Sentimen", "📈 Confusion Matrix", "🧾 Laporan Klasifikasi"])
 
-st.write("##### Current ticket priorities")
-priority_plot = (
-    alt.Chart(edited_df)
-    .mark_arc()
-    .encode(theta="count():Q", color="Priority:N")
-    .properties(height=300)
-    .configure_legend(
-        orient="bottom", titleFontSize=14, labelFontSize=14, titlePadding=5
-    )
-)
-st.altair_chart(priority_plot, use_container_width=True, theme="streamlit")
+with tab1:
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("Pie Chart")
+        fig_pie, ax_pie = plt.subplots(figsize=(6, 6))
+        ax_pie.pie(sentiment_count, labels=sentiment_count.index, autopct='%1.1f%%', startangle=90,
+                   colors=['#66b3ff', '#ff6666', '#99ff99'])
+        ax_pie.axis('equal')
+        st.pyplot(fig_pie)
+    with c2:
+        st.subheader("Bar Chart")
+        fig_bar, ax_bar = plt.subplots(figsize=(6, 5))
+        sns.barplot(x=sentiment_count.index, y=sentiment_count.values, palette='pastel', ax=ax_bar)
+        ax_bar.set_title('Distribusi Sentimen')
+        st.pyplot(fig_bar)
+
+with tab2:
+    st.subheader("Confusion Matrix")
+    cm = confusion_matrix(y_test, y_pred)
+    fig_cm, ax_cm = plt.subplots(figsize=(6, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=['Negatif', 'Netral', 'Positif'],
+                yticklabels=['Negatif', 'Netral', 'Positif'],
+                ax=ax_cm, square=True)
+    ax_cm.set_xlabel('Predicted')
+    ax_cm.set_ylabel('Actual')
+    st.pyplot(fig_cm)
+
+with tab3:
+    st.subheader("Classification Report")
+    report = classification_report(y_test, y_pred, target_names=['Negatif', 'Netral', 'Positif'], output_dict=True)
+    st.dataframe(pd.DataFrame(report).transpose())
+
+# ========== INPUT USER ==========
+st.markdown("---")
+st.subheader("💡 Coba Analisis Sentimen Sendiri")
+user_input = st.text_area("Masukkan tweet atau kalimat:")
+
+if user_input:
+    # Preprocessing input (untuk memastikan data sesuai dengan format pelatihan)
+    user_input_vec = vectorizer.transform([user_input])
+
+    # Prediksi dari model
+    prediction = model.predict(user_input_vec)[0]
+
+    # Tampilkan hasil prediksi sesuai dengan kelas sentimen
+    if prediction == "Positif":
+        st.markdown(f"<div class='result-box positive'>😊 Sentimen: <b>{prediction}</b></div>", unsafe_allow_html=True)
+    elif prediction == "Negatif":
+        st.markdown(f"<div class='result-box negative'>😞 Sentimen: <b>{prediction}</b></div>", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div class='result-box neutral'>😐 Sentimen: <b>{prediction}</b></div>", unsafe_allow_html=True)
